@@ -1,0 +1,269 @@
+---
+title: "Stabilizing_selection_analysis"
+author: "Siraj"
+date: "2025-03-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Loading the data I got from Neda from for both the SS and control
+
+```{bash}
+cd /Users/selmasri/projects/neda_data/data
+ls *.csv
+```
+
+````{r}
+neda_data_ss <- read.csv("/Users/selmasri/projects/neda_data/data/sieving_count_data.csv", header = TRUE, sep = ";")
+str(neda_data_ss)
+neda_data_control <- read.csv("/Users/selmasri/projects/neda_data/data/sieving_count_data_controls.csv", 
+                              header = TRUE, sep = ";")
+str(neda_data_control)
+str(neda_data_ss)
+````
+## function for data cleaning and transformation for both data
+```{r}
+# Convert columns to formats useful for later:
+
+clean_data <- function(data) {
+  data$treatment   <- factor(data$treatment)
+  data$replicate   <- factor(data$replicate)
+  data$sieve_num   <- factor(data$sieve_num)
+  data$sieve_size  <- as.numeric(data$sieve_size)
+  data$who         <- factor(data$who)
+  data$date        <- as.Date(data$date, format = "%d.%m.%y") 
+  data$generation  <- factor(data$generation)
+  return(data)
+}
+neda_data_ss <- clean_data(neda_data_ss)
+neda_data_control <- clean_data(neda_data_control)
+str(neda_data_control)
+```
+
+#Tranforming female data into pseudo continous by asssinging a row with the sieve size value for each fly in a replicate
+
+```{r}
+create_pseudo_continuous_female <- function(data) {
+  library(dplyr)
+  library(tidyr)
+  data %>% 
+    uncount(female_num, .remove = FALSE) %>%
+    mutate(sieve_expanded = sieve_size) %>%
+    select(generation, replicate, sieve_expanded, who)
+}
+pseudo_continuous_female_ss <- create_pseudo_continuous_female(neda_data_ss)
+pseudo_continuous_female_control <- create_pseudo_continuous_female(neda_data_control)
+
+```
+###Computing pop size for each replicate and including it in the pseudo continuous, in case needed for later
+```{r}
+
+pop_size_data_ss <- neda_data_ss %>%
+  group_by(generation, replicate) %>%
+  summarise(pop_size = sum(female_num, na.rm = TRUE) + sum(male_num, na.rm = TRUE), .groups = "drop")
+
+##including population size in the pseudo continous data for later analysis
+pseudo_continuous_female_ss <- pseudo_continuous_female_ss %>%
+  left_join(pop_size_data_ss, by = c("generation", "replicate"))
+
+````
+
+####plot the pop size per generation
+
+````{r}
+ ggplot(pop_size_data_ss, aes(x = as.factor(generation), y = pop_size, color = replicate, group = replicate)) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  labs(
+    title = "Population Size by Replicate and Generation",
+    x = "Generation",
+    y = "Population Size"
+  )
+
+```
+
+#Visualisation of replicates across generations in two ways, proportion and pseudo continuous
+```{r}
+library(Cairo)
+library(RColorBrewer)
+
+
+palette.12 <- brewer.pal(n = 12, name = "Paired")
+
+pseudo_continuous_ss <- ggplot(pseudo_continuous_female_ss, aes(x = factor(generation), y = sieve_expanded, fill = factor(generation))) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(alpha = 0.7, width = 0.1) +
+  labs(title = "Violin and Boxplot of Sieve Distributions Across Generations",
+       x = "Generation", y = "Sieve Bin (Pseudo-Continuous)", fill = "Generation") +
+  scale_fill_manual(values = palette.12) +
+  facet_wrap(~ replicate, ncol = 3) +
+  theme_minimal()
+png(filename = "/Users/selmasri/projects/neda_data/figs/pseudo_continuous_ss.png",
+    width = 8, height = 6, units = "in", res = 300, bg = "white")
+print(pseudo_continuous_ss)
+dev.off()
+
+# ---- Boxplot of Female Proportions Across Generations ----
+
+informative_bins_ss <- neda_data_ss %>%
+  group_by(generation, replicate) %>%
+  mutate(total_females = sum(female_num, na.rm = TRUE)) %>%  # Compute total females per generation & replicate
+  ungroup() %>%
+  group_by(generation, replicate, sieve_size) %>%
+  summarise(female_prop = sum(female_num, na.rm = TRUE) / unique(total_females), .groups = "drop")
+
+
+
+ proportions <- ggplot(informative_bins_ss, aes(x = factor(generation), y = sieve_size, fill = factor(generation))) +
+  geom_boxplot(aes(weight = female_prop), alpha = 0.7, outlier.shape = NA) +
+  labs(title = "Distribution of Female Proportions Across Generations (Faceted by Replicate)",
+       x = "Generation", y = "Sieve Size (µm)", fill = "Generation") +
+  scale_fill_manual(values = palette.12) +
+  facet_wrap(~ replicate, ncol = 3) +
+  scale_y_continuous(breaks = c(937,1085, 1250)) +  # Only key sieve sizes
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "right",
+        strip.text = element_text(size = 12, face = "bold"))
+
+png(filename = "/Users/selmasri/projects/neda_data/figs/proportions_ss.png",
+    width = 8, height = 6, units = "in", res = 300, bg = "white")
+print(proportions)
+dev.off()
+
+
+```
+
+# Computing an average fly size per replicate per generation as a summary statistic based on pseudo-continuous transformation of the data
+
+
+```{r}
+###I will change 800 to 850 in the psuedo continuous data so the flies 800 dont drag the mean down although there is rarely females in 800 and then calculate a mean fly size
+calc_avg_fly_size <- function(pseudo_data) {
+  pseudo_data %>%
+    mutate(sieve_expanded = ifelse(sieve_expanded == 800, 850, sieve_expanded)) %>%
+    group_by(generation, replicate) %>%
+    summarise(avg_fly_size = mean(sieve_expanded, na.rm = TRUE), .groups = "drop")
+}
+
+##Apply for SS
+avg_fly_size_ss <- calc_avg_fly_size(pseudo_continuous_female_ss)
+head(avg_fly_size_ss)
+
+#Apply for control
+avg_fly_size_control <- calc_avg_fly_size(pseudo_continuous_female_control)
+head(avg_fly_size_control)
+
+
+
+
+
+pseudo_continuous_female_ss_850 <- pseudo_continuous_female_ss %>%
+  mutate(sieve_expanded = ifelse(sieve_expanded == 800, 850, sieve_expanded))
+
+avg_fly_size_ss <- pseudo_continuous_female_ss_850 %>%
+  group_by(generation, replicate) %>%
+  summarise(avg_fly_size = mean(sieve_expanded, na.rm = TRUE), .groups = "drop")  # Compute mean sieve size
+
+head(avg_fly_size_ss)
+
+```
+
+##Visualisation 
+```{r}
+avg_fly_plot_ss <- ggplot(avg_fly_size_ss, aes(x = factor(generation), y = avg_fly_size)) +
+  geom_boxplot(fill = "orange", alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, color = "black") +
+  labs(title = "Average Fly Size per Generation", 
+       x = "Generation", 
+       y = "Mean Fly Size (µm)") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),        # Bold, larger title
+    axis.title.x = element_text(size = 14, face = "bold"),        # Bold, larger x-axis title
+    axis.title.y = element_text(size = 14, face = "bold"),        # Bold, larger y-axis title
+    legend.title = element_text(size = 12, face = "bold"),        # Bold legend title
+    legend.text = element_text(size = 10)                         # Larger legend text
+  )
+
+ggsave(
+  filename = "/Users/selmasri/projects/neda_data/figs/mean_size_ss.png",
+  plot = avg_fly_plot_ss,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+
+avg_fly_ss_labeled <- ggplot(avg_fly_size_ss, aes(x = factor(generation), y = avg_fly_size)) +
+  geom_boxplot(fill = "orange", alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, aes(color = replicate)) +
+  geom_text(aes(label = replicate), 
+            position = position_jitter(width = 0.2, height = 0), 
+            vjust = -1.5, size = 3.5) +
+  labs(title = "Average Fly Size per Generation",
+       x = "Generation", y = "Mean Fly Size (µm)") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+ggsave(
+  filename = "/Users/selmasri/projects/neda_data/figs/mean_size_ss_labels.png",
+  plot = avg_fly_ss_labeled,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+```
+
+##Control visualisation
+
+```{r}
+ggplot(avg_fly_size_control, aes(x = factor(generation), y = avg_fly_size)) +
+  geom_boxplot(fill = "green", alpha = 0.7) +
+  geom_jitter(width = 0.2, size = 2, aes(color = replicate)) +
+  geom_text(aes(label = replicate), 
+            position = position_jitter(width = 0.2, height = 0), 
+            vjust = -1.5, size = 3.5) +
+  labs(title = "Average Fly Size per Generation (Increasing Selection Replicates 90->82%)",
+       x = "Generation", y = "Mean Fly Size (µm)") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 14, face = "bold"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10)
+  )
+
+
+```
+#Anova with generation and replicate as predictor and mean fly size as response
+```{r}
+#the summarize function above produced a tibble and the anova needs a df
+
+avg_fly_size_ss <- as.data.frame(avg_fly_size_ss)
+
+anova_result_ss <- aov(avg_fly_size ~ generation + replicate, data = avg_fly_size_ss)
+summary(anova_result_ss)
+
+
+shapiro.test(residuals(anova_result_ss))  # Should be > 0.05 for normality, which is the case
+
+qqnorm(residuals(anova_result_ss))
+qqline(residuals(anova_result_ss), col = "red")
+residuals_ss <- residuals(anova_result_ss)
+
+library(car)
+leveneTest(residuals_ss ~ avg_fly_size_ss$generation) #p> 0.05 assumption met of homogenity of variance.
+TukeyHSD(anova_result_ss)
+
+```
