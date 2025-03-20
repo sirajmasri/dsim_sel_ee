@@ -1,1 +1,1 @@
-# dsim_sel_ee
+# Truncating selection on body size of Drosophila simulans
