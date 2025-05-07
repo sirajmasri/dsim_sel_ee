@@ -43,7 +43,7 @@ neda_data_control <- clean_data(neda_data_control)
 str(neda_data_control)
 ```
 
-#Tranforming female data into pseudo continous by asssinging a row with the sieve size value for each fly in a replicate
+#Transforming female data into pseudo-continuous by assigning a row with the sieve size value for each fly in a replicate
 
 ```{r}
 create_pseudo_continuous_female <- function(data) {
